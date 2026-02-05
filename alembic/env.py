@@ -8,12 +8,15 @@ from sqlalchemy.ext.asyncio import create_async_engine
 
 from alembic import context
 
+from infra.db.base import Base
+from infra.db import models  # noqa: F401
+
 config = context.config
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-target_metadata = None
+target_metadata = Base.metadata
 
 
 def _build_database_url_from_env() -> str | None:
