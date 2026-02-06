@@ -7,7 +7,6 @@ from core.config.settings import Settings
 from core.services.menu import (
     MENU_ADMIN,
     MENU_CHAT,
-    MENU_GALLERY,
     MENU_TRYON,
     build_main_menu_keyboard,
 )
@@ -19,10 +18,6 @@ def create_menu_router() -> Router:
     @router.message(F.text == MENU_TRYON)
     async def menu_tryon(message: Message) -> None:
         await message.answer("Функция «Примерить тату» пока в разработке.")
-
-    @router.message(F.text == MENU_GALLERY)
-    async def menu_gallery(message: Message) -> None:
-        await message.answer("Галерея пока в разработке.")
 
     @router.message(F.text == MENU_CHAT)
     async def menu_chat(message: Message) -> None:
