@@ -7,6 +7,7 @@ from aiogram import F, Router
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from apps.bot.states.booking import BookingStates
 from core.config.settings import Settings
@@ -20,7 +21,9 @@ from core.services.booking_flow import (
     question_for_step,
     render_summary,
 )
-from core.services.menu import MENU_BOOK, build_main_menu_keyboard
+from core.services.calendar_ui import CalendarCb, CalendarView, build_calendar_keyboard
+from core.services.menu import MENU_BOOK
+from core.services.schedule import DEFAULT_SCHEDULE_POLICY, today_msk
 
 _EDIT_FIELDS = {
     "want_custom_sketch",
@@ -29,8 +32,11 @@ _EDIT_FIELDS = {
     "calendar_time",
     "promo_code",
 }
-_SET_FIELDS = {"want_custom_sketch", "body_part", "calendar_date"}
-_SKIP_FIELDS = {"calendar_time", "promo_code"}
+_SET_FIELDS = {"want_custom_sketch", "body_part", "calendar_date", "calendar_time"}
+_SKIP_FIELDS = {"promo_code"}
+
+_CONFIRM_IN_FLIGHT_KEY = "booking_confirm_in_flight"
+_ORDER_ID_KEY = "booking_order_id"
 
 
 def _state_for_step(step: str) -> Any:
@@ -80,7 +86,7 @@ async def _render_flow(*, message: Message, state: FSMContext, step: str) -> Non
 
     summary_text = render_summary(data)
     summary_kb = build_summary_keyboard(data)
-    question_text, question_kb = question_for_step(step, today=date.today())
+    question_text, question_kb = question_for_step(step, today=today_msk())
 
     summary_id = data.get(SUMMARY_MESSAGE_ID_KEY)
     question_id = data.get(QUESTION_MESSAGE_ID_KEY)
@@ -149,12 +155,119 @@ def create_booking_router() -> Router:
                     message=message,
                     message_id=question_id,
                     text="Введите промокод или нажмите «Пропустить».",
-                    reply_markup=question_for_step("promo_code", today=date.today())[1],
+                    reply_markup=question_for_step("promo_code", today=today_msk())[1],
                 )
             return
 
         await state.update_data({"promo_code": code})
         await _advance(message=message, state=state)
+
+    @router.callback_query(CalendarCb.filter())
+    async def calendar_callback(
+        query: CallbackQuery,
+        callback_data: CalendarCb,
+        state: FSMContext,
+    ) -> None:
+        if query.message is None:
+            await query.answer()
+            return
+
+        current_state = await state.get_state()
+        data = await state.get_data()
+        summary_id = data.get(SUMMARY_MESSAGE_ID_KEY)
+        question_id = data.get(QUESTION_MESSAGE_ID_KEY)
+        today = today_msk()
+
+        if current_state is None:
+            await query.answer(
+                "Сессия завершена. Нажмите «Записаться на сеанс» заново.",
+                show_alert=False,
+            )
+            return
+
+        # Calendar controls are only valid while choosing a date.
+        if current_state != BookingStates.calendar_date.state:
+            await query.answer("Сначала выберите шаг записи заново.", show_alert=False)
+            return
+
+        if (
+            summary_id is not None
+            and question_id is not None
+            and query.message.message_id not in {summary_id, question_id}
+        ):
+            await query.answer("Сообщение устарело.", show_alert=False)
+            return
+
+        # Validate callback payload to avoid crashes on forged data.
+        if not (1 <= callback_data.month <= 12):
+            await query.answer("Некорректные данные.", show_alert=False)
+            return
+        from datetime import timedelta
+
+        max_day = today + timedelta(days=DEFAULT_SCHEDULE_POLICY.days_ahead)
+        if not (today.year - 1 <= callback_data.year <= max_day.year + 1):
+            await query.answer("Некорректные данные.", show_alert=False)
+            return
+        # Keep navigation within allowed months window.
+        min_view = (today.year, today.month)
+        max_view = (max_day.year, max_day.month)
+        if (callback_data.year, callback_data.month) < min_view or (
+            callback_data.year,
+            callback_data.month,
+        ) > max_view:
+            await query.answer("Некорректные данные.", show_alert=False)
+            return
+
+        if callback_data.action == "noop":
+            await query.answer()
+            return
+
+        if callback_data.action in {"prev", "next"}:
+            if question_id is None:
+                await query.answer()
+                return
+            kb = build_calendar_keyboard(
+                today=today,
+                view=CalendarView(year=callback_data.year, month=callback_data.month),
+                policy=DEFAULT_SCHEDULE_POLICY,
+            )
+            await _try_edit_message(
+                message=query.message,
+                message_id=question_id,
+                text="Выберите дату:",
+                reply_markup=kb,
+            )
+            await query.answer()
+            return
+
+        if callback_data.action == "day":
+            if callback_data.day is None:
+                await query.answer("Некорректная дата.", show_alert=False)
+                return
+
+            try:
+                chosen = date(
+                    callback_data.year, callback_data.month, callback_data.day
+                )
+            except ValueError:
+                await query.answer("Некорректная дата.", show_alert=False)
+                return
+            from core.services.schedule import is_date_available
+
+            if not is_date_available(
+                chosen=chosen, today=today, policy=DEFAULT_SCHEDULE_POLICY
+            ):
+                await query.answer("Дата недоступна.", show_alert=False)
+                return
+
+            data["calendar_date"] = chosen.isoformat()
+            data.pop("calendar_time", None)
+            await state.set_data(data)
+            await _advance(message=query.message, state=state)
+            await query.answer()
+            return
+
+        await query.answer()
 
     @router.callback_query(BookingCb.filter())
     async def booking_callback(
@@ -162,6 +275,7 @@ def create_booking_router() -> Router:
         callback_data: BookingCb,
         state: FSMContext,
         settings: Settings,
+        session: AsyncSession,
     ) -> None:
         if query.message is None:
             await query.answer()
@@ -212,43 +326,120 @@ def create_booking_router() -> Router:
                 return
 
             try:
-                parsed = parse_set_value(field=field, value=value, today=date.today())
+                parsed = parse_set_value(field=field, value=value, today=today_msk())
             except ValueError:
                 await query.answer("Некорректное значение.", show_alert=False)
                 return
 
-            await state.update_data({field: parsed})
+            if field == "calendar_date":
+                # If date is changed, time should be chosen again (remove the key).
+                data = await state.get_data()
+                data["calendar_date"] = parsed
+                data.pop("calendar_time", None)
+                await state.set_data(data)
+            else:
+                await state.update_data({field: parsed})
             await _advance(message=query.message, state=state)
             await query.answer()
             return
 
         if callback_data.action == "confirm":
-            # Finish: disable old inline keyboards, clear draft, return to main menu.
+            user = query.from_user
+            if user is None:
+                await query.answer(
+                    "Не удалось определить пользователя.", show_alert=False
+                )
+                return
+
             data = await state.get_data()
+            # Idempotency: if we already created an order for this draft,
+            # do not create again.
+            existing_order_id = data.get(_ORDER_ID_KEY)
+            if isinstance(existing_order_id, int) and existing_order_id > 0:
+                order_id = existing_order_id
+            else:
+                if data.get(_CONFIRM_IN_FLIGHT_KEY) is True:
+                    await query.answer("Подтверждаем заявку...", show_alert=False)
+                    return
+                await state.update_data({_CONFIRM_IN_FLIGHT_KEY: True})
+
+            calendar_date = data.get("calendar_date")
+            calendar_time = data.get("calendar_time")
+            if not calendar_date or not calendar_time:
+                await query.answer("Выберите дату и время.", show_alert=False)
+                await state.update_data({_CONFIRM_IN_FLIGHT_KEY: False})
+                return
+
+            from core.services.booking_orders import persist_booking_as_order
+
+            nickname = (user.username or user.full_name or str(user.id))[:20]
+            # Best-effort: disable inline keyboards ASAP to reduce
+            # double-click duplicates.
             summary_id = data.get(SUMMARY_MESSAGE_ID_KEY)
             question_id = data.get(QUESTION_MESSAGE_ID_KEY)
-
             if summary_id is not None:
                 await _try_edit_message(
                     message=query.message,
                     message_id=summary_id,
-                    text=f"{render_summary(data)}\n\nСтатус: подтверждено",
+                    text=render_summary(data),
+                    reply_markup=None,
+                )
+            if question_id is not None:
+                # Keep text, just remove keyboard.
+                question_text, _ = question_for_step("confirm", today=today_msk())
+                await _try_edit_message(
+                    message=query.message,
+                    message_id=question_id,
+                    text=question_text,
+                    reply_markup=None,
+                )
+
+            if not (isinstance(existing_order_id, int) and existing_order_id > 0):
+                try:
+                    order_id = await persist_booking_as_order(
+                        session=session,
+                        tg_id=user.id,
+                        tg_nickname=nickname,
+                        calendar_date=str(calendar_date),
+                        calendar_time=str(calendar_time),
+                    )
+                except Exception:
+                    # Allow retry by restoring the confirm UI.
+                    await state.update_data({_CONFIRM_IN_FLIGHT_KEY: False})
+                    await _render_flow(
+                        message=query.message, state=state, step="confirm"
+                    )
+                    await query.answer(
+                        "Не удалось подтвердить заявку. Попробуйте ещё раз.",
+                        show_alert=False,
+                    )
+                    return
+                await state.update_data({_ORDER_ID_KEY: int(order_id)})
+
+            # Finish: disable old inline keyboards, clear draft, return to main menu.
+            if summary_id is not None:
+                await _try_edit_message(
+                    message=query.message,
+                    message_id=summary_id,
+                    text=(
+                        f"{render_summary(data)}\n\n"
+                        f"Статус: подтверждено\n"
+                        f"Заказ: #{order_id}"
+                    ),
                     reply_markup=None,
                 )
             if question_id is not None:
                 await _try_edit_message(
                     message=query.message,
                     message_id=question_id,
-                    text="Завершено.",
+                    text=(
+                        f"Заявка подтверждена. Номер заказа: #{order_id}\n\n"
+                        "Главное меню доступно на клавиатуре ниже."
+                    ),
                     reply_markup=None,
                 )
 
             await state.clear()
-            is_admin = query.from_user.id in settings.admin_user_ids
-            await query.message.answer(
-                "Заявка подтверждена (заглушка). Главное меню:",
-                reply_markup=build_main_menu_keyboard(is_admin=is_admin),
-            )
             await query.answer()
             return
 

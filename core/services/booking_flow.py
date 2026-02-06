@@ -2,12 +2,15 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import date
 from typing import Any
 
 from aiogram.filters.callback_data import CallbackData
 from aiogram.types import InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
+
+from core.services.calendar_ui import CalendarView, build_calendar_keyboard
+from core.services.schedule import DEFAULT_SCHEDULE_POLICY, list_time_slots
 
 SUMMARY_MESSAGE_ID_KEY = "booking_summary_message_id"
 QUESTION_MESSAGE_ID_KEY = "booking_question_message_id"
@@ -75,9 +78,18 @@ def parse_set_value(*, field: str, value: str, today: date) -> Any:
         except ValueError as e:
             raise ValueError("Invalid calendar_date format") from e
 
-        allowed = {today + timedelta(days=i) for i in range(7)}
-        if chosen not in allowed:
+        from core.services.schedule import is_date_available
+
+        if not is_date_available(
+            chosen=chosen, today=today, policy=DEFAULT_SCHEDULE_POLICY
+        ):
             raise ValueError("calendar_date out of range")
+        return value
+
+    if field == "calendar_time":
+        slots = set(list_time_slots(DEFAULT_SCHEDULE_POLICY))
+        if value not in slots:
+            raise ValueError("Invalid calendar_time")
         return value
 
     raise ValueError("Unsupported field for set")
@@ -93,6 +105,12 @@ def _fmt_value(field: str, value: Any) -> str:
             return "Нет"
     if field == "body_part":
         return BODY_PART_OPTIONS.get(str(value), str(value))
+    if field == "calendar_date":
+        try:
+            d = date.fromisoformat(str(value))
+            return d.strftime("%d.%m.%Y")
+        except ValueError:
+            return str(value)
     return str(value)
 
 
@@ -150,26 +168,23 @@ def build_body_part_keyboard() -> InlineKeyboardMarkup:
 
 
 def build_calendar_date_keyboard(*, today: date) -> InlineKeyboardMarkup:
-    builder = InlineKeyboardBuilder()
-    for i in range(7):
-        d = today + timedelta(days=i)
-        builder.button(
-            text=d.strftime("%d.%m"),
-            callback_data=BookingCb(
-                action="set", field="calendar_date", value=d.isoformat()
-            ).pack(),
-        )
-    builder.adjust(4, 3)
-    return builder.as_markup()
+    return build_calendar_keyboard(
+        today=today,
+        view=CalendarView(year=today.year, month=today.month),
+        policy=DEFAULT_SCHEDULE_POLICY,
+    )
 
 
 def build_calendar_time_keyboard() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
-    builder.button(
-        text="Пропустить",
-        callback_data=BookingCb(action="skip", field="calendar_time").pack(),
-    )
-    builder.adjust(1)
+    for slot in list_time_slots(DEFAULT_SCHEDULE_POLICY):
+        builder.button(
+            text=slot,
+            callback_data=BookingCb(
+                action="set", field="calendar_time", value=slot
+            ).pack(),
+        )
+    builder.adjust(3)
     return builder.as_markup()
 
 
@@ -200,10 +215,7 @@ def question_for_step(
     if step == "calendar_date":
         return "Выберите дату:", build_calendar_date_keyboard(today=today)
     if step == "calendar_time":
-        return (
-            "Время пока не выбираем. Нажмите «Пропустить».",
-            build_calendar_time_keyboard(),
-        )
+        return "Выберите время (МСК):", build_calendar_time_keyboard()
     if step == "promo_code":
         return "Введите промокод или нажмите «Пропустить».", build_promo_code_keyboard()
     if step == "confirm":

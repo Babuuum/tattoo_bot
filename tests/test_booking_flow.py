@@ -22,7 +22,7 @@ def test_next_missing_step_skips_answered_false_and_none() -> None:
     }
     assert next_missing_step(data) == "calendar_time"
 
-    data["calendar_time"] = None
+    data["calendar_time"] = "12:00"
     assert next_missing_step(data) == "promo_code"
 
     data["promo_code"] = None
@@ -78,6 +78,7 @@ def test_parse_set_value_validations() -> None:
         parse_set_value(field="calendar_date", value="2026-02-06", today=today)
         == "2026-02-06"
     )
+    assert parse_set_value(field="calendar_time", value="12:00", today=today) == "12:00"
 
     try:
         parse_set_value(field="body_part", value="bad", today=today)
@@ -86,7 +87,13 @@ def test_parse_set_value_validations() -> None:
         pass
 
     try:
-        parse_set_value(field="calendar_date", value="2026-03-01", today=today)
+        parse_set_value(field="calendar_date", value="2026-05-08", today=today)
+        raise AssertionError("expected ValueError")
+    except ValueError:
+        pass
+
+    try:
+        parse_set_value(field="calendar_time", value="11:00", today=today)
         raise AssertionError("expected ValueError")
     except ValueError:
         pass
