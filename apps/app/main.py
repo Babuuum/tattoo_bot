@@ -10,6 +10,7 @@ from fastapi import FastAPI, HTTPException, Request
 from redis.asyncio import Redis
 
 from apps.app.routes.health import router as health_router
+from apps.bot.middlewares.db_session import DbSessionMiddleware
 from apps.bot.routers import create_bot_router
 from core.config.settings import Settings
 from core.logging.logger import setup_logging
@@ -34,6 +35,8 @@ def create_dispatcher(*, settings: Settings, redis: Redis) -> Dispatcher:
     storage = RedisStorage(redis=redis)
     dp = Dispatcher(storage=storage)
     dp["settings"] = settings
+    # Inject per-update AsyncSession via middleware.
+    # Repositories/services should accept `session: AsyncSession`.
     dp.include_router(create_bot_router())
     return dp
 
@@ -59,6 +62,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     bot = create_bot(settings)
     dp = create_dispatcher(settings=settings, redis=app.state.redis)
+    dp["session_maker"] = app.state.session_maker
+    dp.update.outer_middleware(DbSessionMiddleware(app.state.session_maker))
     app.state.bot = bot
     app.state.dispatcher = dp
 
