@@ -57,7 +57,7 @@ def _build_app(monkeypatch):
     dispatcher.feed_update = AsyncMock()
 
     monkeypatch.setattr(module, "create_bot", lambda _settings: dummy_bot)
-    monkeypatch.setattr(module, "create_dispatcher", lambda: dispatcher)
+    monkeypatch.setattr(module, "create_dispatcher", lambda **_kwargs: dispatcher)
 
     app = module.create_app()
     return app, dispatcher

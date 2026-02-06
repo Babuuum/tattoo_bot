@@ -9,12 +9,30 @@ There is a single FastAPI service (`app`) that hosts both the API and the bot we
 - Python 3.13
 - Poetry
 
+## Bot UI (MVP Stub)
+- `/start` shows the main menu (reply keyboard).
+- Main menu buttons:
+  - `Записаться на сеанс` (FSM flow)
+  - `Примерить тату` (stub)
+  - `Галерея` (stub)
+  - `Чат с мастером` (stub)
+  - `Админка` (stub, visible only for users in `ADMIN_USER_IDS`)
+
+### Booking Flow: `Записаться на сеанс`
+- The flow keeps a draft in Redis via aiogram FSM storage (no separate Redis client for draft data).
+- The UI is always two bot messages:
+  - верхнее: `Сводка заказа` (updated via edit, includes inline "Изменить" for filled fields)
+  - нижнее: текущий вопрос (updated via edit on each step)
+- Current steps (stubs): sketch? -> body part -> date (7 days) -> time (skip) -> promo code -> confirm.
+
 ## Quick Start (Docker)
 1. Create `.env` from `.env.example` and fill required values.
 2. Run services:
 
 ```bash
-docker compose up --build
+docker compose up -d --build
+curl -f http://localhost:8000/health
+docker compose down -v --remove-orphans
 ```
 
 API will be available at `http://localhost:8000/health`.
@@ -43,8 +61,10 @@ ngrok http 8000
 
 ## Checks
 ```bash
-pytest
-pre-commit run --all-files
+poetry run pytest
+poetry run ruff check .
+poetry run black .
+poetry run pre-commit run -a
 ```
 
 ## Health Endpoint

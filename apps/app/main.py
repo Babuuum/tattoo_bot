@@ -4,8 +4,10 @@ import asyncio
 import contextlib
 
 from aiogram import Bot, Dispatcher
+from aiogram.fsm.storage.redis import RedisStorage
 from aiogram.types import Update
 from fastapi import FastAPI, HTTPException, Request
+from redis.asyncio import Redis
 
 from apps.app.routes.health import router as health_router
 from apps.bot.routers import create_bot_router
@@ -28,8 +30,10 @@ def create_bot(settings: Settings) -> Bot:
     return Bot(token=settings.bot_token)
 
 
-def create_dispatcher() -> Dispatcher:
-    dp = Dispatcher()
+def create_dispatcher(*, settings: Settings, redis: Redis) -> Dispatcher:
+    storage = RedisStorage(redis=redis)
+    dp = Dispatcher(storage=storage)
+    dp["settings"] = settings
     dp.include_router(create_bot_router())
     return dp
 
@@ -54,7 +58,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.redis = create_redis(settings.redis_url)
 
     bot = create_bot(settings)
-    dp = create_dispatcher()
+    dp = create_dispatcher(settings=settings, redis=app.state.redis)
     app.state.bot = bot
     app.state.dispatcher = dp
 

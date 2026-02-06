@@ -30,6 +30,8 @@ services:
       context: .
       dockerfile: Dockerfile.app
     env_file: .env
+    environment:
+      PYTHONPATH: /app
     networks:
       - backend
     depends_on:

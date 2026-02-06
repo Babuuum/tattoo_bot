@@ -7,9 +7,8 @@ from sqlalchemy import pool
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from alembic import context
-
-from infra.db.base import Base
 from infra.db import models  # noqa: F401
+from infra.db.base import Base
 
 config = context.config
 
