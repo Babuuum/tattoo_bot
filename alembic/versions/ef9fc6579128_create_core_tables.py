@@ -1,7 +1,7 @@
 """create core tables
 
 Revision ID: ef9fc6579128
-Revises: 
+Revises:
 Create Date: 2026-02-05 07:11:13.405036
 """
 
