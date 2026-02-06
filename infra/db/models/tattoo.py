@@ -25,6 +25,7 @@ class Tattoo(Base):
     style_id: Mapped[int] = mapped_column(ForeignKey("styles.id"), nullable=False)
     price: Mapped[int | None] = mapped_column(Integer, nullable=True)
     views: Mapped[int] = mapped_column(Integer, default=0)
+    photo_file_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
     style: Mapped[Style] = relationship("Style", back_populates="tattoos")
     orders: Mapped[list[Order]] = relationship("Order", back_populates="tattoo")
