@@ -3,10 +3,15 @@ from __future__ import annotations
 from datetime import date
 
 from core.services.booking_flow import (
+    CONFIRM_IN_FLIGHT_KEY,
+    ORDER_ID_KEY,
+    QUESTION_MESSAGE_ID_KEY,
+    SUMMARY_MESSAGE_ID_KEY,
     build_summary_keyboard,
     next_missing_step,
     parse_set_value,
     render_summary,
+    reset_booking_draft_data,
 )
 
 
@@ -60,12 +65,45 @@ def test_build_summary_keyboard_contains_edit_actions_for_answered_fields() -> N
         "Изменить: Индивидуальный эскиз",
         "Изменить: Часть тела",
         "Изменить: Время",
+        "Сбросить заявку",
+        "В меню",
     ]
-    assert [b.callback_data for b in buttons] == [
-        "booking:edit:want_custom_sketch:",
-        "booking:edit:body_part:",
-        "booking:edit:calendar_time:",
-    ]
+    callback_data = [b.callback_data for b in buttons]
+    assert callback_data[0] == "booking:edit:want_custom_sketch:"
+    assert callback_data[1] == "booking:edit:body_part:"
+    assert callback_data[2] == "booking:edit:calendar_time:"
+    assert callback_data[3].startswith("booking:reset")
+    assert callback_data[4].startswith("booking:menu")
+
+
+def test_reset_booking_draft_data_clears_fields_but_keeps_message_ids() -> None:
+    data = {
+        SUMMARY_MESSAGE_ID_KEY: 111,
+        QUESTION_MESSAGE_ID_KEY: 222,
+        CONFIRM_IN_FLIGHT_KEY: True,
+        ORDER_ID_KEY: 999,
+        "want_custom_sketch": True,
+        "body_part": "arm",
+        "calendar_date": "2026-02-06",
+        "calendar_time": "12:00",
+        "promo_code": "X",
+        "price_estimate": 12345,
+        "some_other_key": "keep",
+    }
+
+    new_data = reset_booking_draft_data(data)
+    assert new_data[SUMMARY_MESSAGE_ID_KEY] == 111
+    assert new_data[QUESTION_MESSAGE_ID_KEY] == 222
+    assert new_data["some_other_key"] == "keep"
+
+    assert "want_custom_sketch" not in new_data
+    assert "body_part" not in new_data
+    assert "calendar_date" not in new_data
+    assert "calendar_time" not in new_data
+    assert "promo_code" not in new_data
+    assert "price_estimate" not in new_data
+    assert CONFIRM_IN_FLIGHT_KEY not in new_data
+    assert ORDER_ID_KEY not in new_data
 
 
 def test_parse_set_value_validations() -> None:

@@ -12,6 +12,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from apps.bot.states.booking import BookingStates
 from core.config.settings import Settings
 from core.services.booking_flow import (
+    CONFIRM_IN_FLIGHT_KEY,
+    ORDER_ID_KEY,
     QUESTION_MESSAGE_ID_KEY,
     SUMMARY_MESSAGE_ID_KEY,
     BookingCb,
@@ -20,9 +22,10 @@ from core.services.booking_flow import (
     parse_set_value,
     question_for_step,
     render_summary,
+    reset_booking_draft_data,
 )
 from core.services.calendar_ui import CalendarCb, CalendarView, build_calendar_keyboard
-from core.services.menu import MENU_BOOK
+from core.services.menu import MENU_BOOK, build_main_menu_keyboard
 from core.services.schedule import DEFAULT_SCHEDULE_POLICY, today_msk
 
 _EDIT_FIELDS = {
@@ -34,9 +37,6 @@ _EDIT_FIELDS = {
 }
 _SET_FIELDS = {"want_custom_sketch", "body_part", "calendar_date", "calendar_time"}
 _SKIP_FIELDS = {"promo_code"}
-
-_CONFIRM_IN_FLIGHT_KEY = "booking_confirm_in_flight"
-_ORDER_ID_KEY = "booking_order_id"
 
 
 def _state_for_step(step: str) -> Any:
@@ -79,6 +79,40 @@ async def _try_delete_message(*, message: Message, message_id: int) -> bool:
         return True
     except TelegramBadRequest:
         return False
+
+
+async def _send_main_menu(
+    *,
+    message: Message,
+    settings: Settings,
+    text: str = "Главное меню:",
+) -> None:
+    is_admin = message.from_user is not None and (
+        message.from_user.id in settings.admin_user_ids
+    )
+    await message.answer(
+        text,
+        reply_markup=build_main_menu_keyboard(is_admin=is_admin),
+    )
+
+
+async def _replace_question_message(
+    *,
+    message: Message,
+    state: FSMContext,
+    text: str,
+    reply_markup: Any,
+) -> None:
+    """
+    Replace the "lower" question message if it can't be edited.
+    Summary ordering invariant stays valid: summary is older than the new question.
+    """
+    data = await state.get_data()
+    question_id = data.get(QUESTION_MESSAGE_ID_KEY)
+    if question_id is not None:
+        await _try_delete_message(message=message, message_id=question_id)
+    sent = await message.answer(text, reply_markup=reply_markup)
+    await state.update_data({QUESTION_MESSAGE_ID_KEY: sent.message_id})
 
 
 async def _render_flow(*, message: Message, state: FSMContext, step: str) -> None:
@@ -151,12 +185,15 @@ def create_booking_router() -> Router:
             data = await state.get_data()
             question_id = data.get(QUESTION_MESSAGE_ID_KEY)
             if question_id is not None:
-                await _try_edit_message(
+                ok = await _try_edit_message(
                     message=message,
                     message_id=question_id,
                     text="Введите промокод или нажмите «Пропустить».",
                     reply_markup=question_for_step("promo_code", today=today_msk())[1],
                 )
+                if not ok:
+                    # Keep 2-message invariant and refresh message ids if needed.
+                    await _render_flow(message=message, state=state, step="promo_code")
             return
 
         await state.update_data({"promo_code": code})
@@ -231,12 +268,21 @@ def create_booking_router() -> Router:
                 view=CalendarView(year=callback_data.year, month=callback_data.month),
                 policy=DEFAULT_SCHEDULE_POLICY,
             )
-            await _try_edit_message(
+            ok = await _try_edit_message(
                 message=query.message,
                 message_id=question_id,
                 text="Выберите дату:",
                 reply_markup=kb,
             )
+            if not ok:
+                # If the question message was deleted or can't be edited, replace it
+                # and update FSM data.
+                await _replace_question_message(
+                    message=query.message,
+                    state=state,
+                    text="Выберите дату:",
+                    reply_markup=kb,
+                )
             await query.answer()
             return
 
@@ -285,7 +331,7 @@ def create_booking_router() -> Router:
         data = await state.get_data()
         summary_id = data.get(SUMMARY_MESSAGE_ID_KEY)
         question_id = data.get(QUESTION_MESSAGE_ID_KEY)
-        if current_state is None and callback_data.action != "confirm":
+        if current_state is None and callback_data.action not in {"confirm", "menu"}:
             await query.answer(
                 "Сессия завершена. Нажмите «Записаться на сеанс» заново.",
                 show_alert=False,
@@ -354,20 +400,20 @@ def create_booking_router() -> Router:
             data = await state.get_data()
             # Idempotency: if we already created an order for this draft,
             # do not create again.
-            existing_order_id = data.get(_ORDER_ID_KEY)
+            existing_order_id = data.get(ORDER_ID_KEY)
             if isinstance(existing_order_id, int) and existing_order_id > 0:
                 order_id = existing_order_id
             else:
-                if data.get(_CONFIRM_IN_FLIGHT_KEY) is True:
+                if data.get(CONFIRM_IN_FLIGHT_KEY) is True:
                     await query.answer("Подтверждаем заявку...", show_alert=False)
                     return
-                await state.update_data({_CONFIRM_IN_FLIGHT_KEY: True})
+                await state.update_data({CONFIRM_IN_FLIGHT_KEY: True})
 
             calendar_date = data.get("calendar_date")
             calendar_time = data.get("calendar_time")
             if not calendar_date or not calendar_time:
                 await query.answer("Выберите дату и время.", show_alert=False)
-                await state.update_data({_CONFIRM_IN_FLIGHT_KEY: False})
+                await state.update_data({CONFIRM_IN_FLIGHT_KEY: False})
                 return
 
             from core.services.booking_orders import persist_booking_as_order
@@ -405,7 +451,7 @@ def create_booking_router() -> Router:
                     )
                 except Exception:
                     # Allow retry by restoring the confirm UI.
-                    await state.update_data({_CONFIRM_IN_FLIGHT_KEY: False})
+                    await state.update_data({CONFIRM_IN_FLIGHT_KEY: False})
                     await _render_flow(
                         message=query.message, state=state, step="confirm"
                     )
@@ -414,11 +460,11 @@ def create_booking_router() -> Router:
                         show_alert=False,
                     )
                     return
-                await state.update_data({_ORDER_ID_KEY: int(order_id)})
+                await state.update_data({ORDER_ID_KEY: int(order_id)})
 
             # Finish: disable old inline keyboards, clear draft, return to main menu.
             if summary_id is not None:
-                await _try_edit_message(
+                ok_s = await _try_edit_message(
                     message=query.message,
                     message_id=summary_id,
                     text=(
@@ -428,8 +474,10 @@ def create_booking_router() -> Router:
                     ),
                     reply_markup=None,
                 )
+            else:
+                ok_s = False
             if question_id is not None:
-                await _try_edit_message(
+                ok_q = await _try_edit_message(
                     message=query.message,
                     message_id=question_id,
                     text=(
@@ -438,8 +486,42 @@ def create_booking_router() -> Router:
                     ),
                     reply_markup=None,
                 )
+            else:
+                ok_q = False
 
             await state.clear()
+            # Ensure user sees a result even if messages were deleted.
+            if not (ok_s and ok_q):
+                await _send_main_menu(
+                    message=query.message,
+                    settings=settings,
+                    text=(
+                        f"Заявка подтверждена. Номер заказа: #{order_id}\n\n"
+                        "Главное меню:"
+                    ),
+                )
+            await query.answer()
+            return
+
+        if callback_data.action == "reset":
+            data = await state.get_data()
+            await state.set_data(reset_booking_draft_data(data))
+            await _render_flow(
+                message=query.message, state=state, step="want_custom_sketch"
+            )
+            await query.answer()
+            return
+
+        if callback_data.action == "menu":
+            data = await state.get_data()
+            summary_id = data.get(SUMMARY_MESSAGE_ID_KEY)
+            question_id = data.get(QUESTION_MESSAGE_ID_KEY)
+            if summary_id is not None:
+                await _try_delete_message(message=query.message, message_id=summary_id)
+            if question_id is not None:
+                await _try_delete_message(message=query.message, message_id=question_id)
+            await state.clear()
+            await _send_main_menu(message=query.message, settings=settings)
             await query.answer()
             return
 

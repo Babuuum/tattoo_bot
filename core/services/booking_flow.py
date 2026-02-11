@@ -14,6 +14,12 @@ from core.services.schedule import DEFAULT_SCHEDULE_POLICY, list_time_slots
 
 SUMMARY_MESSAGE_ID_KEY = "booking_summary_message_id"
 QUESTION_MESSAGE_ID_KEY = "booking_question_message_id"
+# Booking flow internal keys stored in FSM data.
+CONFIRM_IN_FLIGHT_KEY = "booking_confirm_in_flight"
+ORDER_ID_KEY = "booking_order_id"
+
+# Optional draft fields that might exist in older/newer iterations of the flow.
+_OPTIONAL_DRAFT_KEYS: frozenset[str] = frozenset({"price_estimate"})
 
 
 class BookingCb(CallbackData, prefix="booking"):
@@ -47,6 +53,22 @@ BODY_PART_OPTIONS: dict[str, str] = {
 }
 
 EDITABLE_FIELD_KEYS: frozenset[str] = frozenset(field.key for field in BOOKING_FIELDS)
+
+
+def reset_booking_draft_data(data: Mapping[str, Any]) -> dict[str, Any]:
+    """
+    Clear user-provided booking draft fields while keeping flow message ids.
+
+    This is a pure function for unit testing.
+    """
+    new_data = dict(data)
+    for field in BOOKING_FIELDS:
+        new_data.pop(field.key, None)
+    for key in _OPTIONAL_DRAFT_KEYS:
+        new_data.pop(key, None)
+    new_data.pop(CONFIRM_IN_FLIGHT_KEY, None)
+    new_data.pop(ORDER_ID_KEY, None)
+    return new_data
 
 
 def is_answered(data: Mapping[str, Any], field: str) -> bool:
@@ -134,6 +156,12 @@ def build_summary_keyboard(data: Mapping[str, Any]) -> InlineKeyboardMarkup:
             text=f"Изменить: {field.label}",
             callback_data=BookingCb(action="edit", field=field.key).pack(),
         )
+    # Flow-level actions are always available.
+    builder.button(
+        text="Сбросить заявку",
+        callback_data=BookingCb(action="reset").pack(),
+    )
+    builder.button(text="В меню", callback_data=BookingCb(action="menu").pack())
     builder.adjust(1)
     return builder.as_markup()
 
