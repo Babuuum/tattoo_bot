@@ -7,10 +7,13 @@ from aiogram import F, Router
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
+from aiogram.utils.keyboard import InlineKeyboardBuilder
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from apps.bot.states.booking import BookingStates
 from core.config.settings import Settings
+from core.repositories.orders import exists_order_with_start_at
 from core.services.booking_flow import (
     CONFIRM_IN_FLIGHT_KEY,
     ORDER_ID_KEY,
@@ -24,9 +27,17 @@ from core.services.booking_flow import (
     render_summary,
     reset_booking_draft_data,
 )
+from core.services.calendar_availability import (
+    CalendarAvailabilityService,
+    _parse_time_hhmm,
+)
 from core.services.calendar_ui import CalendarCb, CalendarView, build_calendar_keyboard
 from core.services.menu import MENU_BOOK, build_main_menu_keyboard
-from core.services.schedule import DEFAULT_SCHEDULE_POLICY, today_msk
+from core.services.schedule import (
+    DEFAULT_SCHEDULE_POLICY,
+    compose_start_at_utc,
+    today_msk,
+)
 
 _EDIT_FIELDS = {
     "want_custom_sketch",
@@ -49,6 +60,19 @@ def _state_for_step(step: str) -> Any:
         "confirm": BookingStates.confirm,
     }
     return mapping[step]
+
+
+def _build_time_keyboard(*, slots: list[str]) -> Any:
+    builder = InlineKeyboardBuilder()
+    for slot in slots:
+        builder.button(
+            text=slot,
+            callback_data=BookingCb(
+                action="set", field="calendar_time", value=slot
+            ).pack(),
+        )
+    builder.adjust(3)
+    return builder.as_markup()
 
 
 async def _try_edit_message(
@@ -115,12 +139,73 @@ async def _replace_question_message(
     await state.update_data({QUESTION_MESSAGE_ID_KEY: sent.message_id})
 
 
-async def _render_flow(*, message: Message, state: FSMContext, step: str) -> None:
+async def _render_flow(
+    *,
+    message: Message,
+    state: FSMContext,
+    step: str,
+    session: AsyncSession,
+    override_question_text: str | None = None,
+) -> None:
     data = await state.get_data()
 
     summary_text = render_summary(data)
     summary_kb = build_summary_keyboard(data)
     question_text, question_kb = question_for_step(step, today=today_msk())
+
+    if override_question_text is not None:
+        question_text = override_question_text
+
+    service = CalendarAvailabilityService(policy=DEFAULT_SCHEDULE_POLICY)
+
+    # Dynamic availability-aware keyboards for date/time steps.
+    if step == "calendar_date":
+        disabled = await service.get_disabled_dates(session=session, today=today_msk())
+        question_kb = build_calendar_keyboard(
+            today=today_msk(),
+            view=CalendarView(year=today_msk().year, month=today_msk().month),
+            policy=DEFAULT_SCHEDULE_POLICY,
+            disabled_dates=disabled,
+        )
+
+    if step == "calendar_time":
+        raw_date = data.get("calendar_date")
+        if not isinstance(raw_date, str):
+            # Fall back to date step if state is inconsistent.
+            disabled = await service.get_disabled_dates(
+                session=session, today=today_msk()
+            )
+            question_text = "Выберите дату:"
+            question_kb = build_calendar_keyboard(
+                today=today_msk(),
+                view=CalendarView(year=today_msk().year, month=today_msk().month),
+                policy=DEFAULT_SCHEDULE_POLICY,
+                disabled_dates=disabled,
+            )
+            step = "calendar_date"
+        else:
+            chosen_date = date.fromisoformat(raw_date)
+            slots = await service.get_available_slots(session=session, day=chosen_date)
+            if not slots:
+                # Date became unavailable (fully booked / blocked). Force re-pick.
+                data.pop("calendar_time", None)
+                data.pop("calendar_date", None)
+                await state.set_data(data)
+                disabled = await service.get_disabled_dates(
+                    session=session, today=today_msk()
+                )
+                question_text = (
+                    "На выбранную дату нет доступных слотов. Выберите другую дату:"
+                )
+                question_kb = build_calendar_keyboard(
+                    today=today_msk(),
+                    view=CalendarView(year=today_msk().year, month=today_msk().month),
+                    policy=DEFAULT_SCHEDULE_POLICY,
+                    disabled_dates=disabled,
+                )
+                step = "calendar_date"
+            else:
+                question_kb = _build_time_keyboard(slots=slots)
 
     summary_id = data.get(SUMMARY_MESSAGE_ID_KEY)
     question_id = data.get(QUESTION_MESSAGE_ID_KEY)
@@ -164,21 +249,51 @@ async def _render_flow(*, message: Message, state: FSMContext, step: str) -> Non
     await state.set_state(_state_for_step(step))
 
 
-async def _advance(*, message: Message, state: FSMContext) -> None:
+async def _advance(
+    *, message: Message, state: FSMContext, session: AsyncSession
+) -> None:
     data = await state.get_data()
     step = next_missing_step(data)
-    await _render_flow(message=message, state=state, step=step)
+    # If the chosen date has no free slots, force user back to date selection.
+    if step == "calendar_time":
+        raw_date = data.get("calendar_date")
+        if isinstance(raw_date, str):
+            chosen_date = date.fromisoformat(raw_date)
+            service = CalendarAvailabilityService(policy=DEFAULT_SCHEDULE_POLICY)
+            slots = await service.get_available_slots(session=session, day=chosen_date)
+            if not slots:
+                data.pop("calendar_time", None)
+                data.pop("calendar_date", None)
+                await state.set_data(data)
+                step = "calendar_date"
+                await _render_flow(
+                    message=message,
+                    state=state,
+                    step=step,
+                    session=session,
+                    override_question_text=(
+                        "На выбранную дату нет доступных слотов. Выберите другую дату:"
+                    ),
+                )
+                return
+    await _render_flow(message=message, state=state, step=step, session=session)
 
 
 def create_booking_router() -> Router:
     router = Router()
 
     @router.message(F.text == MENU_BOOK)
-    async def start_booking(message: Message, state: FSMContext) -> None:
-        await _advance(message=message, state=state)
+    async def start_booking(
+        message: Message,
+        state: FSMContext,
+        session: AsyncSession,
+    ) -> None:
+        await _advance(message=message, state=state, session=session)
 
     @router.message(BookingStates.promo_code)
-    async def promo_code_input(message: Message, state: FSMContext) -> None:
+    async def promo_code_input(
+        message: Message, state: FSMContext, session: AsyncSession
+    ) -> None:
         code = (message.text or "").strip()
         # Treat empty input as "not answered yet": ask again.
         if not code:
@@ -193,17 +308,20 @@ def create_booking_router() -> Router:
                 )
                 if not ok:
                     # Keep 2-message invariant and refresh message ids if needed.
-                    await _render_flow(message=message, state=state, step="promo_code")
+                    await _render_flow(
+                        message=message, state=state, step="promo_code", session=session
+                    )
             return
 
         await state.update_data({"promo_code": code})
-        await _advance(message=message, state=state)
+        await _advance(message=message, state=state, session=session)
 
-    @router.callback_query(CalendarCb.filter())
+    @router.callback_query(CalendarCb.filter(), BookingStates.calendar_date)
     async def calendar_callback(
         query: CallbackQuery,
         callback_data: CalendarCb,
         state: FSMContext,
+        session: AsyncSession,
     ) -> None:
         if query.message is None:
             await query.answer()
@@ -220,11 +338,6 @@ def create_booking_router() -> Router:
                 "Сессия завершена. Нажмите «Записаться на сеанс» заново.",
                 show_alert=False,
             )
-            return
-
-        # Calendar controls are only valid while choosing a date.
-        if current_state != BookingStates.calendar_date.state:
-            await query.answer("Сначала выберите шаг записи заново.", show_alert=False)
             return
 
         if (
@@ -263,10 +376,13 @@ def create_booking_router() -> Router:
             if question_id is None:
                 await query.answer()
                 return
+            service = CalendarAvailabilityService(policy=DEFAULT_SCHEDULE_POLICY)
+            disabled = await service.get_disabled_dates(session=session, today=today)
             kb = build_calendar_keyboard(
                 today=today,
                 view=CalendarView(year=callback_data.year, month=callback_data.month),
                 policy=DEFAULT_SCHEDULE_POLICY,
+                disabled_dates=disabled,
             )
             ok = await _try_edit_message(
                 message=query.message,
@@ -305,11 +421,18 @@ def create_booking_router() -> Router:
             ):
                 await query.answer("Дата недоступна.", show_alert=False)
                 return
+            service = CalendarAvailabilityService(policy=DEFAULT_SCHEDULE_POLICY)
+            slots = await service.get_available_slots(session=session, day=chosen)
+            if not slots:
+                await query.answer(
+                    "На эту дату нет доступных слотов.", show_alert=False
+                )
+                return
 
             data["calendar_date"] = chosen.isoformat()
             data.pop("calendar_time", None)
             await state.set_data(data)
-            await _advance(message=query.message, state=state)
+            await _advance(message=query.message, state=state, session=session)
             await query.answer()
             return
 
@@ -350,7 +473,9 @@ def create_booking_router() -> Router:
             if step is None or step not in _EDIT_FIELDS:
                 await query.answer()
                 return
-            await _render_flow(message=query.message, state=state, step=step)
+            await _render_flow(
+                message=query.message, state=state, step=step, session=session
+            )
             await query.answer()
             return
 
@@ -360,7 +485,7 @@ def create_booking_router() -> Router:
                 await query.answer()
                 return
             await state.update_data({field: None})
-            await _advance(message=query.message, state=state)
+            await _advance(message=query.message, state=state, session=session)
             await query.answer()
             return
 
@@ -384,8 +509,23 @@ def create_booking_router() -> Router:
                 data.pop("calendar_time", None)
                 await state.set_data(data)
             else:
+                if field == "calendar_time":
+                    data = await state.get_data()
+                    raw_date = data.get("calendar_date")
+                    if not isinstance(raw_date, str):
+                        await query.answer("Сначала выберите дату.", show_alert=False)
+                        return
+                    chosen_date = date.fromisoformat(raw_date)
+                    service = CalendarAvailabilityService(
+                        policy=DEFAULT_SCHEDULE_POLICY
+                    )
+                    if not await service.is_slot_available(
+                        session=session, day=chosen_date, slot_hhmm=str(parsed)
+                    ):
+                        await query.answer("Слот недоступен.", show_alert=False)
+                        return
                 await state.update_data({field: parsed})
-            await _advance(message=query.message, state=state)
+            await _advance(message=query.message, state=state, session=session)
             await query.answer()
             return
 
@@ -415,6 +555,30 @@ def create_booking_router() -> Router:
                 await query.answer("Выберите дату и время.", show_alert=False)
                 await state.update_data({CONFIRM_IN_FLIGHT_KEY: False})
                 return
+            try:
+                chosen_date = date.fromisoformat(str(calendar_date))
+            except ValueError:
+                await query.answer("Некорректная дата.", show_alert=False)
+                await state.update_data({CONFIRM_IN_FLIGHT_KEY: False})
+                return
+            service = CalendarAvailabilityService(policy=DEFAULT_SCHEDULE_POLICY)
+            if not await service.is_slot_available(
+                session=session, day=chosen_date, slot_hhmm=str(calendar_time)
+            ):
+                await query.answer(
+                    "Слот больше недоступен. Выберите другое время.", show_alert=False
+                )
+                await state.update_data({CONFIRM_IN_FLIGHT_KEY: False})
+                data = await state.get_data()
+                data.pop("calendar_time", None)
+                await state.set_data(data)
+                await _render_flow(
+                    message=query.message,
+                    state=state,
+                    step="calendar_time",
+                    session=session,
+                )
+                return
 
             from core.services.booking_orders import persist_booking_as_order
 
@@ -442,6 +606,26 @@ def create_booking_router() -> Router:
 
             if not (isinstance(existing_order_id, int) and existing_order_id > 0):
                 try:
+                    # Best-effort race guard: avoid duplicate booking for same start_at.
+                    start_at_utc = compose_start_at_utc(
+                        chosen_date=date.fromisoformat(str(calendar_date)),
+                        chosen_time=_parse_time_hhmm(str(calendar_time)),
+                    )
+                    if await exists_order_with_start_at(
+                        session=session, start_at=start_at_utc
+                    ):
+                        await state.update_data({CONFIRM_IN_FLIGHT_KEY: False})
+                        await _render_flow(
+                            message=query.message,
+                            state=state,
+                            step="calendar_time",
+                            session=session,
+                        )
+                        await query.answer(
+                            "Слот уже занят. Выберите другое время.", show_alert=False
+                        )
+                        return
+
                     order_id = await persist_booking_as_order(
                         session=session,
                         tg_id=user.id,
@@ -449,11 +633,31 @@ def create_booking_router() -> Router:
                         calendar_date=str(calendar_date),
                         calendar_time=str(calendar_time),
                     )
+                except IntegrityError:
+                    # DB-level protection (unique slot) triggered by concurrent booking.
+                    await state.update_data({CONFIRM_IN_FLIGHT_KEY: False})
+                    data = await state.get_data()
+                    data.pop("calendar_time", None)
+                    await state.set_data(data)
+                    await _render_flow(
+                        message=query.message,
+                        state=state,
+                        step="calendar_time",
+                        session=session,
+                    )
+                    await query.answer(
+                        "Слот уже занят. Выберите другое время.",
+                        show_alert=False,
+                    )
+                    return
                 except Exception:
                     # Allow retry by restoring the confirm UI.
                     await state.update_data({CONFIRM_IN_FLIGHT_KEY: False})
                     await _render_flow(
-                        message=query.message, state=state, step="confirm"
+                        message=query.message,
+                        state=state,
+                        step="confirm",
+                        session=session,
                     )
                     await query.answer(
                         "Не удалось подтвердить заявку. Попробуйте ещё раз.",
@@ -507,7 +711,10 @@ def create_booking_router() -> Router:
             data = await state.get_data()
             await state.set_data(reset_booking_draft_data(data))
             await _render_flow(
-                message=query.message, state=state, step="want_custom_sketch"
+                message=query.message,
+                state=state,
+                step="want_custom_sketch",
+                session=session,
             )
             await query.answer()
             return
