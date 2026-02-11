@@ -48,8 +48,12 @@ def build_calendar_keyboard(
     today: date,
     view: CalendarView,
     policy: SchedulePolicy = DEFAULT_SCHEDULE_POLICY,
+    disabled_dates: set[date] | None = None,
+    marked_dates: set[date] | None = None,
 ) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
+    disabled_dates = disabled_dates or set()
+    marked_dates = marked_dates or set()
 
     # Header
     builder.row(
@@ -88,10 +92,15 @@ def build_calendar_keyboard(
 
     for d in range(1, days_in_month + 1):
         chosen = date(view.year, view.month, d)
-        selectable = is_date_available(chosen=chosen, today=today, policy=policy)
+        selectable = is_date_available(chosen=chosen, today=today, policy=policy) and (
+            chosen not in disabled_dates
+        )
         text = f"{d}"
         if chosen == today:
             text = f"[{d}]"
+        if chosen in marked_dates:
+            # Minimal indication (admin UI) without redesigning the component.
+            text = f"{text}x"
         cells.append(
             (
                 text,

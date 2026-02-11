@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from aiogram import Router
 
+from apps.bot.handlers.admin_calendar import create_admin_calendar_router
 from apps.bot.handlers.admin_catalog import create_admin_catalog_router
 from apps.bot.handlers.booking import create_booking_router
 from apps.bot.handlers.gallery import create_gallery_router
@@ -15,6 +16,7 @@ def create_bot_router() -> Router:
     router.include_router(create_booking_router())
     router.include_router(create_gallery_router())
     router.include_router(create_admin_catalog_router())
+    router.include_router(create_admin_calendar_router())
     router.include_router(create_menu_router())
     return router
 
