@@ -1,15 +1,34 @@
 repos:
-  - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.4.8
+  # Local hooks to avoid network access during CI/sandbox runs.
+  # Tools are installed via Poetry (see `pyproject.toml`).
+  - repo: local
     hooks:
       - id: ruff
-  - repo: https://github.com/psf/black
-    rev: 24.4.2
-    hooks:
+        name: ruff
+        entry: poetry run ruff check --force-exclude
+        language: system
+        types_or: [python, pyi]
+
       - id: black
-  - repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: v4.6.0
-    hooks:
-      - id: end-of-file-fixer
+        name: black
+        entry: poetry run black
+        language: system
+        types_or: [python, pyi]
+
       - id: trailing-whitespace
+        name: trailing-whitespace
+        entry: poetry run python tools/precommit/trailing_whitespace.py
+        language: system
+        types: [text]
+
+      - id: end-of-file-fixer
+        name: end-of-file-fixer
+        entry: poetry run python tools/precommit/end_of_file_fixer.py
+        language: system
+        types: [text]
+
       - id: check-yaml
+        name: check-yaml
+        entry: poetry run python tools/precommit/check_yaml.py
+        language: system
+        files: "\\.(yml|yaml)$"
