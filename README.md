@@ -23,7 +23,15 @@ There is a single FastAPI service (`app`) that hosts both the API and the bot we
 - The UI is always two bot messages:
   - верхнее: `Сводка заказа` (updated via edit, includes inline "Изменить" for filled fields)
   - нижнее: текущий вопрос (updated via edit on each step)
-- Current steps (stubs): sketch? -> body part -> date (7 days) -> time (skip) -> promo code -> confirm.
+- Summary inline buttons (always available during the flow):
+  - `Сбросить заявку` (clears draft fields and restarts from the first question)
+  - `В меню` (cancels the flow and shows the main menu)
+- Calendar policy (fact):
+  - `days_ahead=90` (date range is inclusive, based on Moscow date)
+  - timezone: `Europe/Moscow` (UI shows "МСК", persisted `start_at` is stored in UTC)
+  - time slots: `12:00` .. `20:00` (hourly, inclusive)
+- Current steps (fact): sketch? -> body part -> date -> time -> promo code -> confirm.
+- `confirm` persists an `Order` record in Postgres (via `core.services.booking_orders.persist_booking_as_order`).
 
 ## Quick Start (Docker)
 1. Create `.env` from `.env.example` and fill required values.
