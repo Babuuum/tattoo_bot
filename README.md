@@ -13,7 +13,7 @@ There is a single FastAPI service (`app`) that hosts both the API and the bot we
 - `/start` shows the main menu (reply keyboard).
 - Main menu buttons:
   - `Записаться на сеанс` (FSM flow)
-  - `Примерить тату` (stub)
+  - `Примерить тату` (opens Telegram Mini App URL from `MINI_APP_URL`)
   - `Галерея` (stub)
   - `Чат с мастером` (stub)
   - `Админка` (stub, visible only for users in `ADMIN_USER_IDS`)
@@ -79,3 +79,17 @@ poetry run pre-commit run -a
 ```bash
 curl http://localhost:8000/health
 ```
+
+## Mini App API (MVP)
+- `POST /api/webapp/auth`
+  - `prod`: accepts only Telegram `init_data` (validated signature + `auth_date` max age).
+  - `dev`: can also accept `dev_shared_secret` if `DEV_SHARED_SECRET` is configured.
+- `GET /api/webapp/context` (Bearer token required)
+- `POST /api/webapp/selected-design` (Bearer token required)
+- `POST /api/pricing/calc` (Bearer token required)
+
+Auth env vars:
+- `WEBAPP_AUTH_MAX_AGE_SECONDS` (default `300`)
+- `WEBAPP_AUTH_RATE_LIMIT_PER_MINUTE` (default `20`, per IP for `/api/webapp/auth`)
+- `DEV_SHARED_SECRET` (used only in `APP_ENV=dev`)
+- `MINI_APP_URL` (reply-menu WebApp button URL)

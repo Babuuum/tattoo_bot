@@ -302,3 +302,22 @@ PaymentProvider:
 - обновлена документация (если менялся интерфейс/API/модель);
 - CI зелёный (format/lint/tests);
 - пройден security checklist.
+
+
+## 11. Mini App API (реализовано, MVP)
+- `POST /api/webapp/auth`
+  - `APP_ENV=prod`: только Telegram WebApp `init_data` (валидация подписи и `auth_date`).
+  - `APP_ENV=dev`: можно использовать `DEV_SHARED_SECRET` для локального теста.
+- `GET /api/webapp/context` (Bearer auth)
+- `POST /api/webapp/selected-design` (Bearer auth)
+- `POST /api/pricing/calc` (Bearer auth)
+
+MVP формула цены:
+- `price = max(min_price, base_price * k_style * k_body_zone)`
+- скидка применяется после формулы
+- политика округления берётся из активного `pricing_config.rounding_policy`
+
+Bot integration (MVP):
+- кнопка `Примерить тату` в reply-меню открывает Telegram WebApp (`MINI_APP_URL`)
+- бот принимает `message.web_app_data`, валидирует JSON payload и отправляет пользователю сводку
+- для `POST /api/webapp/auth` включён лимит запросов per-IP
