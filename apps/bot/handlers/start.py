@@ -18,7 +18,10 @@ def create_start_router() -> Router:
         )
         await message.answer(
             "Главное меню:",
-            reply_markup=build_main_menu_keyboard(is_admin=is_admin),
+            reply_markup=build_main_menu_keyboard(
+                is_admin=is_admin,
+                mini_app_url=settings.mini_app_url,
+            ),
         )
 
     return router

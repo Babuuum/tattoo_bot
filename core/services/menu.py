@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from aiogram.types import KeyboardButton, ReplyKeyboardMarkup
+from aiogram.types import KeyboardButton, ReplyKeyboardMarkup, WebAppInfo
 
 MENU_BOOK = "Записаться на сеанс"
 MENU_TRYON = "Примерить тату"
@@ -9,10 +9,12 @@ MENU_CHAT = "Чат с мастером"
 MENU_ADMIN = "Админка"
 
 
-def build_main_menu_keyboard(*, is_admin: bool) -> ReplyKeyboardMarkup:
+def build_main_menu_keyboard(
+    *, is_admin: bool, mini_app_url: str
+) -> ReplyKeyboardMarkup:
     rows: list[list[KeyboardButton]] = [
         [KeyboardButton(text=MENU_BOOK)],
-        [KeyboardButton(text=MENU_TRYON)],
+        [KeyboardButton(text=MENU_TRYON, web_app=WebAppInfo(url=mini_app_url))],
         [KeyboardButton(text=MENU_GALLERY)],
         [KeyboardButton(text=MENU_CHAT)],
     ]

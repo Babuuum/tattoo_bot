@@ -10,6 +10,8 @@ from fastapi import FastAPI, HTTPException, Request
 from redis.asyncio import Redis
 
 from apps.app.routes.health import router as health_router
+from apps.app.routes.pricing import router as pricing_router
+from apps.app.routes.webapp import router as webapp_router
 from apps.bot.middlewares.db_session import DbSessionMiddleware
 from apps.bot.routers import create_bot_router
 from core.config.settings import Settings
@@ -51,6 +53,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     app = FastAPI()
     app.include_router(health_router)
+    app.include_router(webapp_router)
+    app.include_router(pricing_router)
 
     app.state.settings = settings
     app.state.logger = logger

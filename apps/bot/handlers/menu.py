@@ -9,6 +9,7 @@ from core.services.menu import (
     MENU_TRYON,
     build_main_menu_keyboard,
 )
+from core.services.webapp_payload import parse_web_app_data, render_quote_summary
 
 
 def create_menu_router() -> Router:
@@ -16,7 +17,20 @@ def create_menu_router() -> Router:
 
     @router.message(F.text == MENU_TRYON)
     async def menu_tryon(message: Message) -> None:
-        await message.answer("Функция «Примерить тату» пока в разработке.")
+        await message.answer("Нажмите кнопку «Примерить тату» в меню ниже.")
+
+    @router.message(F.web_app_data)
+    async def webapp_data_message(message: Message) -> None:
+        if message.web_app_data is None:
+            return
+        try:
+            quote = parse_web_app_data(message.web_app_data.data)
+        except ValueError:
+            await message.answer(
+                "Не удалось обработать данные из Mini App. Повторите расчёт."
+            )
+            return
+        await message.answer(render_quote_summary(quote))
 
     @router.message(F.text == MENU_CHAT)
     async def menu_chat(message: Message) -> None:
@@ -29,7 +43,10 @@ def create_menu_router() -> Router:
         )
         await message.answer(
             "Главное меню:",
-            reply_markup=build_main_menu_keyboard(is_admin=is_admin),
+            reply_markup=build_main_menu_keyboard(
+                is_admin=is_admin,
+                mini_app_url=settings.mini_app_url,
+            ),
         )
 
     return router

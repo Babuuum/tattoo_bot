@@ -116,7 +116,10 @@ async def _send_main_menu(
     )
     await message.answer(
         text,
-        reply_markup=build_main_menu_keyboard(is_admin=is_admin),
+        reply_markup=build_main_menu_keyboard(
+            is_admin=is_admin,
+            mini_app_url=settings.mini_app_url,
+        ),
     )
 
 

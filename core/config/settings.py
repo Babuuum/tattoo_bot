@@ -17,6 +17,10 @@ class Settings(BaseSettings):
     log_level: str = Field("INFO", validation_alias="LOG_LEVEL")
 
     bot_token: str = Field(..., validation_alias="BOT_TOKEN")
+    mini_app_url: str = Field(
+        "https://example.com/miniapp",
+        validation_alias="MINI_APP_URL",
+    )
     admin_user_ids: Annotated[list[int], NoDecode] = Field(
         default_factory=list, validation_alias="ADMIN_USER_IDS"
     )
@@ -34,6 +38,13 @@ class Settings(BaseSettings):
     db_host: str = Field(..., validation_alias="DB_HOST")
     db_port: int = Field(5432, validation_alias="DB_PORT")
     redis_url: str = Field(..., validation_alias="REDIS_URL")
+    webapp_auth_max_age_seconds: int = Field(
+        300, validation_alias="WEBAPP_AUTH_MAX_AGE_SECONDS"
+    )
+    webapp_auth_rate_limit_per_minute: int = Field(
+        20, validation_alias="WEBAPP_AUTH_RATE_LIMIT_PER_MINUTE"
+    )
+    dev_shared_secret: str = Field("", validation_alias="DEV_SHARED_SECRET")
 
     @field_validator("admin_user_ids", mode="before")
     @classmethod
