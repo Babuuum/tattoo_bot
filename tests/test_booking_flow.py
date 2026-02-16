@@ -117,6 +117,7 @@ def test_parse_set_value_validations() -> None:
         == "2026-02-06"
     )
     assert parse_set_value(field="calendar_time", value="12:00", today=today) == "12:00"
+    assert parse_set_value(field="calendar_time", value="1200", today=today) == "12:00"
 
     try:
         parse_set_value(field="body_part", value="bad", today=today)

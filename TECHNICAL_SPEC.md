@@ -318,6 +318,10 @@ MVP формула цены:
 - политика округления берётся из активного `pricing_config.rounding_policy`
 
 Bot integration (MVP):
-- кнопка `Примерить тату` в reply-меню открывает Telegram WebApp (`MINI_APP_URL`)
+- кнопка `Примерить тату` в reply-меню открывает Telegram WebApp
+  - `APP_ENV=prod`: URL из `MINI_APP_URL`
+  - `APP_ENV=dev`: URL из `MINI_APP_DEV_URL` (localhost)
 - бот принимает `message.web_app_data`, валидирует JSON payload и отправляет пользователю сводку
 - для `POST /api/webapp/auth` включён лимит запросов per-IP
+- в `APP_ENV=dev` можно включить доступ к админ-панели для всех через `DEV_ALLOW_ALL_ADMINS=true`
+- в docker-compose добавлен сервис `miniapp` (Node 20, порт `3000`, volume `./miniapp:/app`)

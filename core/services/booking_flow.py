@@ -55,6 +55,19 @@ BODY_PART_OPTIONS: dict[str, str] = {
 EDITABLE_FIELD_KEYS: frozenset[str] = frozenset(field.key for field in BOOKING_FIELDS)
 
 
+def encode_calendar_time_for_callback(value: str) -> str:
+    # aiogram CallbackData uses ":" as separator, so value can't contain ":".
+    return value.replace(":", "")
+
+
+def decode_calendar_time_from_callback(value: str) -> str:
+    if ":" in value:
+        return value
+    if len(value) == 4 and value.isdigit():
+        return f"{value[:2]}:{value[2:]}"
+    raise ValueError("Invalid calendar_time format")
+
+
 def reset_booking_draft_data(data: Mapping[str, Any]) -> dict[str, Any]:
     """
     Clear user-provided booking draft fields while keeping flow message ids.
@@ -109,6 +122,7 @@ def parse_set_value(*, field: str, value: str, today: date) -> Any:
         return value
 
     if field == "calendar_time":
+        value = decode_calendar_time_from_callback(value)
         slots = set(list_time_slots(DEFAULT_SCHEDULE_POLICY))
         if value not in slots:
             raise ValueError("Invalid calendar_time")
@@ -209,7 +223,9 @@ def build_calendar_time_keyboard() -> InlineKeyboardMarkup:
         builder.button(
             text=slot,
             callback_data=BookingCb(
-                action="set", field="calendar_time", value=slot
+                action="set",
+                field="calendar_time",
+                value=encode_calendar_time_for_callback(slot),
             ).pack(),
         )
     builder.adjust(3)

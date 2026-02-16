@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Annotated, Literal
 
 from pydantic import Field, field_validator
@@ -20,6 +21,14 @@ class Settings(BaseSettings):
     mini_app_url: str = Field(
         "https://example.com/miniapp",
         validation_alias="MINI_APP_URL",
+    )
+    mini_app_dev_url: str = Field(
+        "http://localhost:3000/miniapp",
+        validation_alias="MINI_APP_DEV_URL",
+    )
+    dev_allow_all_admins: bool = Field(
+        True,
+        validation_alias="DEV_ALLOW_ALL_ADMINS",
     )
     admin_user_ids: Annotated[list[int], NoDecode] = Field(
         default_factory=list, validation_alias="ADMIN_USER_IDS"
@@ -53,8 +62,23 @@ class Settings(BaseSettings):
             return value
         if value is None:
             return []
-        items = [item.strip() for item in str(value).split(",") if item.strip()]
+        items = [
+            item.strip() for item in re.split(r"[,\s;]+", str(value)) if item.strip()
+        ]
         return [int(item) for item in items]
+
+    def is_admin_user(self, user_id: int | None) -> bool:
+        if user_id is None:
+            return False
+        if self.app_env == "dev" and self.dev_allow_all_admins:
+            return True
+        return user_id in self.admin_user_ids
+
+    @property
+    def resolved_mini_app_url(self) -> str:
+        if self.app_env == "dev":
+            return self.mini_app_dev_url
+        return self.mini_app_url
 
     @property
     def database_url(self) -> str:

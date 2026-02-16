@@ -13,14 +13,13 @@ def create_start_router() -> Router:
 
     @router.message(CommandStart())
     async def cmd_start(message: Message, settings: Settings) -> None:
-        is_admin = message.from_user is not None and (
-            message.from_user.id in settings.admin_user_ids
-        )
+        user_id = message.from_user.id if message.from_user is not None else None
+        is_admin = settings.is_admin_user(user_id)
         await message.answer(
             "Главное меню:",
             reply_markup=build_main_menu_keyboard(
                 is_admin=is_admin,
-                mini_app_url=settings.mini_app_url,
+                mini_app_url=settings.resolved_mini_app_url,
             ),
         )
 

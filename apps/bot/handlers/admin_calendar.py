@@ -31,7 +31,7 @@ class AdminCalCb(CallbackData, prefix="admincal"):
 
 
 def _is_admin(*, user_id: int | None, settings: Settings) -> bool:
-    return user_id is not None and user_id in settings.admin_user_ids
+    return settings.is_admin_user(user_id)
 
 
 def _append_back_button(

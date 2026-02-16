@@ -21,7 +21,7 @@ class AdminCatalogCb(CallbackData, prefix="admincat"):
 
 def _ensure_admin(message: Message, settings: Settings) -> bool:
     user_id = message.from_user.id if message.from_user is not None else None
-    return user_id is not None and user_id in settings.admin_user_ids
+    return settings.is_admin_user(user_id)
 
 
 def create_admin_catalog_router() -> Router:
@@ -103,7 +103,7 @@ def create_admin_catalog_router() -> Router:
             return
 
         user_id = query.from_user.id if query.from_user is not None else None
-        if user_id is None or user_id not in settings.admin_user_ids:
+        if not settings.is_admin_user(user_id):
             await state.clear()
             await query.answer("Недостаточно прав.", show_alert=False)
             return

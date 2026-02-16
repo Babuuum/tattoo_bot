@@ -49,6 +49,26 @@ services:
     ports:
       - "8000:8000"
 
+  miniapp:
+    image: node:20-alpine
+    working_dir: /app
+    volumes:
+      - ./miniapp:/app
+    command: >
+      sh -c "
+        if [ -f package.json ]; then
+          npm install &&
+          (npm run dev -- --host 0.0.0.0 --port 3000 || npm run start -- --host 0.0.0.0 --port 3000);
+        else
+          echo 'miniapp folder is empty. Put frontend code into ./miniapp and restart.' &&
+          tail -f /dev/null;
+        fi
+      "
+    ports:
+      - "3000:3000"
+    networks:
+      - backend
+
 volumes:
   postgres_data:
 networks:

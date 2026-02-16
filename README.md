@@ -44,6 +44,8 @@ docker compose down -v --remove-orphans
 ```
 
 API will be available at `http://localhost:8000/health`.
+Mini App frontend (if code exists in `./miniapp`) will be available at
+`http://localhost:3000`.
 
 ## Local Development (Poetry)
 ```bash
@@ -51,6 +53,15 @@ poetry install
 
 # Unified app
 uvicorn apps.app.main:app --host 0.0.0.0 --port 8000
+```
+
+## Mini App Frontend (Docker)
+- `docker compose up -d miniapp` starts the frontend container.
+- If `./miniapp` is still empty, container stays alive and logs a hint.
+- After you add frontend files (`package.json` + scripts), restart:
+
+```bash
+docker compose restart miniapp
 ```
 
 ## Dev vs Prod Mode
@@ -92,4 +103,6 @@ Auth env vars:
 - `WEBAPP_AUTH_MAX_AGE_SECONDS` (default `300`)
 - `WEBAPP_AUTH_RATE_LIMIT_PER_MINUTE` (default `20`, per IP for `/api/webapp/auth`)
 - `DEV_SHARED_SECRET` (used only in `APP_ENV=dev`)
-- `MINI_APP_URL` (reply-menu WebApp button URL)
+- `MINI_APP_URL` (prod reply-menu WebApp button URL)
+- `MINI_APP_DEV_URL` (dev reply-menu WebApp button URL, defaults to localhost)
+- `DEV_ALLOW_ALL_ADMINS` (in dev: show/admin-gate for all users, default `true`)

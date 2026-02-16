@@ -21,6 +21,7 @@ from core.services.booking_flow import (
     SUMMARY_MESSAGE_ID_KEY,
     BookingCb,
     build_summary_keyboard,
+    encode_calendar_time_for_callback,
     next_missing_step,
     parse_set_value,
     question_for_step,
@@ -68,7 +69,9 @@ def _build_time_keyboard(*, slots: list[str]) -> Any:
         builder.button(
             text=slot,
             callback_data=BookingCb(
-                action="set", field="calendar_time", value=slot
+                action="set",
+                field="calendar_time",
+                value=encode_calendar_time_for_callback(slot),
             ).pack(),
         )
     builder.adjust(3)
@@ -111,14 +114,13 @@ async def _send_main_menu(
     settings: Settings,
     text: str = "Главное меню:",
 ) -> None:
-    is_admin = message.from_user is not None and (
-        message.from_user.id in settings.admin_user_ids
-    )
+    user_id = message.from_user.id if message.from_user is not None else None
+    is_admin = settings.is_admin_user(user_id)
     await message.answer(
         text,
         reply_markup=build_main_menu_keyboard(
             is_admin=is_admin,
-            mini_app_url=settings.mini_app_url,
+            mini_app_url=settings.resolved_mini_app_url,
         ),
     )
 
