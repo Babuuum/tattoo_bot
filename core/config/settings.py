@@ -23,7 +23,7 @@ class Settings(BaseSettings):
         validation_alias="MINI_APP_URL",
     )
     mini_app_dev_url: str = Field(
-        "http://localhost:3000/miniapp",
+        "http://127.0.0.1:3000/miniapp",
         validation_alias="MINI_APP_DEV_URL",
     )
     dev_allow_all_admins: bool = Field(

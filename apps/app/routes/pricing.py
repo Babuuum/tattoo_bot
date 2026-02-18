@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -11,6 +12,7 @@ from core.services.pricing_service import PricingRequest, calculate_price
 from core.services.webapp_auth_service import WebAppIdentity
 
 router = APIRouter(prefix="/api/pricing", tags=["pricing"])
+logger = logging.getLogger(__name__)
 
 
 @router.post("/calc", response_model=PricingCalcResponse)
@@ -19,6 +21,15 @@ async def pricing_calc(
     identity: Annotated[WebAppIdentity, Depends(get_webapp_identity)],
     session: Annotated[AsyncSession, Depends(get_session)],
 ) -> PricingCalcResponse:
+    logger.info(
+        "Pricing calculation requested",
+        extra={
+            "tg_id": identity.tg_id,
+            "style_id": payload.style_id,
+            "body_zone": payload.body_zone,
+            "has_promo_code": bool(payload.promo_code),
+        },
+    )
     try:
         result = await calculate_price(
             session=session,
@@ -30,8 +41,20 @@ async def pricing_calc(
             ),
         )
     except ValueError as e:
+        logger.warning(
+            "Pricing calculation rejected",
+            extra={"tg_id": identity.tg_id, "reason": str(e)},
+        )
         raise HTTPException(status_code=400, detail=str(e)) from e
 
+    logger.info(
+        "Pricing calculation success",
+        extra={
+            "tg_id": identity.tg_id,
+            "final_price": result.rounded_price,
+            "pricing_config_id": result.pricing_config_id,
+        },
+    )
     return PricingCalcResponse(
         pricing_config_id=result.pricing_config_id,
         base_price=result.base_price,

@@ -28,11 +28,19 @@ def setup_logging(level: str) -> logging.Logger:
         level=getattr(logging, level.upper(), logging.INFO),
         format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
     )
-    logger = logging.getLogger("app")
-
     secret_values = [
         os.getenv("BOT_TOKEN"),
         os.getenv("WEBHOOK_SECRET_TOKEN"),
+        os.getenv("DB_PASSWORD"),
+        os.getenv("DEV_SHARED_SECRET"),
     ]
-    logger.addFilter(_SecretFilter(secret_values))
+    secret_filter = _SecretFilter(secret_values)
+
+    root_logger = logging.getLogger()
+    root_logger.addFilter(secret_filter)
+    for handler in root_logger.handlers:
+        handler.addFilter(secret_filter)
+
+    logger = logging.getLogger("app")
+    logger.addFilter(secret_filter)
     return logger

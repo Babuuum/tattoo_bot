@@ -57,7 +57,10 @@ uvicorn apps.app.main:app --host 0.0.0.0 --port 8000
 
 ## Mini App Frontend (Docker)
 - `docker compose up -d miniapp` starts the frontend container.
-- If `./miniapp` is still empty, container stays alive and logs a hint.
+- Frontend entrypoint is `miniapp/index.html`.
+- If `miniapp/package.json` exists, container runs npm dev/start scripts.
+- If `package.json` is absent but `miniapp/index.html` exists, container serves static files on `:3000`.
+- If `./miniapp` is empty, container stays alive and logs a hint.
 - After you add frontend files (`package.json` + scripts), restart:
 
 ```bash
@@ -104,5 +107,5 @@ Auth env vars:
 - `WEBAPP_AUTH_RATE_LIMIT_PER_MINUTE` (default `20`, per IP for `/api/webapp/auth`)
 - `DEV_SHARED_SECRET` (used only in `APP_ENV=dev`)
 - `MINI_APP_URL` (prod reply-menu WebApp button URL)
-- `MINI_APP_DEV_URL` (dev reply-menu WebApp button URL, defaults to localhost)
+- `MINI_APP_DEV_URL` (dev reply-menu WebApp button URL, default `http://127.0.0.1:3000/miniapp`)
 - `DEV_ALLOW_ALL_ADMINS` (in dev: show/admin-gate for all users, default `true`)

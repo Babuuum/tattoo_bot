@@ -325,3 +325,4 @@ Bot integration (MVP):
 - для `POST /api/webapp/auth` включён лимит запросов per-IP
 - в `APP_ENV=dev` можно включить доступ к админ-панели для всех через `DEV_ALLOW_ALL_ADMINS=true`
 - в docker-compose добавлен сервис `miniapp` (Node 20, порт `3000`, volume `./miniapp:/app`)
+- точка входа Mini App UI: `miniapp/index.html`; при отсутствии `package.json` сервис отдаёт статику напрямую

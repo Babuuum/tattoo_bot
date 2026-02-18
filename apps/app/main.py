@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
+import time
 
 from aiogram import Bot, Dispatcher
 from aiogram.fsm.storage.redis import RedisStorage
@@ -10,6 +12,7 @@ from fastapi import FastAPI, HTTPException, Request
 from redis.asyncio import Redis
 
 from apps.app.routes.health import router as health_router
+from apps.app.routes.miniapp import router as miniapp_router
 from apps.app.routes.pricing import router as pricing_router
 from apps.app.routes.webapp import router as webapp_router
 from apps.bot.middlewares.db_session import DbSessionMiddleware
@@ -19,6 +22,8 @@ from core.logging.logger import setup_logging
 from core.services.mode import BotMode, get_bot_mode
 from infra.db.session import create_async_engine, create_sessionmaker
 from infra.redis.client import create_redis
+
+logger = logging.getLogger(__name__)
 
 
 def build_webhook_url(settings: Settings) -> str:
@@ -49,15 +54,16 @@ async def start_polling(bot: Bot, dp: Dispatcher) -> None:
 
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or Settings()
-    logger = setup_logging(settings.log_level)
+    app_logger = setup_logging(settings.log_level)
 
     app = FastAPI()
     app.include_router(health_router)
+    app.include_router(miniapp_router)
     app.include_router(webapp_router)
     app.include_router(pricing_router)
 
     app.state.settings = settings
-    app.state.logger = logger
+    app.state.logger = app_logger
 
     engine = create_async_engine(settings.database_url)
     app.state.db_engine = engine
@@ -74,23 +80,88 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     mode = get_bot_mode(settings.app_env)
     app.state.bot_mode = mode
 
+    @app.middleware("http")
+    async def access_log_middleware(request: Request, call_next):
+        start = time.perf_counter()
+        method = request.method
+        path = request.url.path
+        try:
+            response = await call_next(request)
+        except Exception:
+            duration_ms = round((time.perf_counter() - start) * 1000, 2)
+            logger.exception(
+                "HTTP request failed",
+                extra={"method": method, "path": path, "duration_ms": duration_ms},
+            )
+            raise
+
+        duration_ms = round((time.perf_counter() - start) * 1000, 2)
+        status_code = response.status_code
+        message = "HTTP request"
+        if status_code >= 500:
+            logger.error(
+                message,
+                extra={
+                    "method": method,
+                    "path": path,
+                    "status_code": status_code,
+                    "duration_ms": duration_ms,
+                },
+            )
+        elif status_code >= 400:
+            logger.warning(
+                message,
+                extra={
+                    "method": method,
+                    "path": path,
+                    "status_code": status_code,
+                    "duration_ms": duration_ms,
+                },
+            )
+        else:
+            logger.info(
+                message,
+                extra={
+                    "method": method,
+                    "path": path,
+                    "status_code": status_code,
+                    "duration_ms": duration_ms,
+                },
+            )
+        return response
+
     if mode == BotMode.WEBHOOK:
 
         @app.post(settings.webhook_path)
         async def telegram_webhook(request: Request) -> dict:
             secret = request.headers.get("X-Telegram-Bot-Api-Secret-Token")
             if secret != settings.webhook_secret_token:
+                logger.warning("Rejected webhook with invalid secret token")
                 raise HTTPException(status_code=403, detail="Forbidden")
             payload = await request.json()
             update = Update.model_validate(payload)
             await dp.feed_update(bot, update)
+            logger.info("Webhook update accepted")
             return {"ok": True}
 
     @app.on_event("startup")
     async def on_startup() -> None:
-        logger.info("App startup")
+        app_logger.info(
+            "App startup",
+            extra={
+                "app_env": settings.app_env,
+                "bot_mode": mode.value,
+                "mini_app_url": settings.resolved_mini_app_url,
+            },
+        )
+        if settings.app_env == "dev" and "localhost" in settings.resolved_mini_app_url:
+            app_logger.warning(
+                "MINI_APP_DEV_URL uses localhost; Telegram Desktop may work, "
+                "mobile Telegram clients will not reach your PC localhost"
+            )
         if mode == BotMode.POLLING:
             app.state.polling_task = asyncio.create_task(start_polling(bot, dp))
+            app_logger.info("Polling started")
             return
 
         if not settings.webhook_url or not settings.webhook_secret_token:
@@ -99,6 +170,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             )
 
         webhook_url = build_webhook_url(settings)
+        app_logger.info("Setting Telegram webhook", extra={"webhook_url": webhook_url})
         await bot.set_webhook(
             url=webhook_url,
             secret_token=settings.webhook_secret_token,
@@ -106,7 +178,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.on_event("shutdown")
     async def on_shutdown() -> None:
-        logger.info("App shutdown")
+        app_logger.info("App shutdown")
         if mode == BotMode.POLLING:
             stop_polling = getattr(dp, "stop_polling", None)
             if callable(stop_polling):

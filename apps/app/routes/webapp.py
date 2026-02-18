@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -30,6 +31,7 @@ from core.services.webapp_context_service import (
 )
 
 router = APIRouter(prefix="/api/webapp", tags=["webapp"])
+logger = logging.getLogger(__name__)
 
 
 @router.post("/auth", response_model=WebAppAuthResponse)
@@ -39,6 +41,7 @@ async def webapp_auth(
     redis: Annotated[Redis, Depends(get_redis)],
     _rate_limit: Annotated[None, Depends(enforce_webapp_auth_rate_limit)],
 ) -> WebAppAuthResponse:
+    logger.info("WebApp auth attempt")
     try:
         result = await authenticate_webapp(
             settings=settings,
@@ -47,9 +50,11 @@ async def webapp_auth(
             dev_shared_secret=payload.dev_shared_secret,
         )
     except ValueError as e:
+        logger.warning("WebApp auth rejected")
         # Avoid exposing auth internals (signature age / replay) in API response.
         raise HTTPException(status_code=401, detail="Unauthorized") from e
 
+    logger.info("WebApp auth success", extra={"tg_id": result.identity.tg_id})
     return WebAppAuthResponse(
         access_token=result.access_token,
         expires_in=result.expires_in,
@@ -63,6 +68,7 @@ async def webapp_context(
     session: Annotated[AsyncSession, Depends(get_session)],
     redis: Annotated[Redis, Depends(get_redis)],
 ) -> WebAppContextResponse:
+    logger.info("WebApp context requested", extra={"tg_id": identity.tg_id})
     context = await build_webapp_context(
         session=session,
         redis=redis,
@@ -83,13 +89,25 @@ async def webapp_selected_design(
     session: Annotated[AsyncSession, Depends(get_session)],
     redis: Annotated[Redis, Depends(get_redis)],
 ) -> SelectedDesignResponse:
+    logger.info(
+        "WebApp selected design update requested",
+        extra={"tg_id": identity.tg_id, "tattoo_id": payload.tattoo_id},
+    )
     tattoo = await get_tattoo(session=session, tattoo_id=payload.tattoo_id)
     if tattoo is None:
+        logger.warning(
+            "WebApp selected design not found",
+            extra={"tg_id": identity.tg_id, "tattoo_id": payload.tattoo_id},
+        )
         raise HTTPException(status_code=404, detail="Tattoo not found")
 
     await set_selected_design(
         redis=redis,
         tg_id=identity.tg_id,
         tattoo_id=payload.tattoo_id,
+    )
+    logger.info(
+        "WebApp selected design updated",
+        extra={"tg_id": identity.tg_id, "tattoo_id": payload.tattoo_id},
     )
     return SelectedDesignResponse(ok=True, selected_design_id=payload.tattoo_id)
